@@ -4,6 +4,7 @@ from __future__ import absolute_import
 from .images import (
     ImageClassificationModelJob,
     GenericImageModelJob,
+    MultiImageModelJob,
     ImageModelJob,
 )
 from .job import ModelJob
@@ -11,6 +12,7 @@ from .job import ModelJob
 __all__ = [
     'ImageClassificationModelJob',
     'GenericImageModelJob',
+    'MultiImageModelJob',
     'ImageModelJob',
     'ModelJob',
 ]

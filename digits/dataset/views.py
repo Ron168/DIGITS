@@ -6,6 +6,7 @@ import werkzeug.exceptions
 
 from . import images as dataset_images
 from . import generic
+from . import multi
 from digits.utils.routing import job_from_request, request_wants_json
 from digits.webapp import scheduler
 
@@ -34,10 +35,14 @@ def show(job_id):
             return dataset_images.classification.views.show(job, related_jobs=related_jobs)
         elif isinstance(job, dataset_images.GenericImageDatasetJob):
             return dataset_images.generic.views.show(job, related_jobs=related_jobs)
+        elif isinstance(job, dataset_images.MultiImageDatasetJob):
+            return dataset_images.multi.views.show(job, related_jobs=related_jobs)
         elif isinstance(job, generic.GenericDatasetJob):
             return generic.views.show(job, related_jobs=related_jobs)
+        elif isinstance(job, multi.MultiDatasetJob):
+            return multi.views.show(job, related_jobs=related_jobs)
         else:
-            raise werkzeug.exceptions.BadRequest('Invalid job type')
+            raise werkzeug.exceptions.BadRequest('Invalid job type 1')
 
 
 @blueprint.route('/summary', methods=['GET'])
@@ -50,7 +55,11 @@ def summary():
         return dataset_images.classification.views.summary(job)
     elif isinstance(job, dataset_images.GenericImageDatasetJob):
         return dataset_images.generic.views.summary(job)
+    elif isinstance(job, dataset_images.MultiImageDatasetJob):
+        return dataset_images.multi.views.summary(job)
     elif isinstance(job, generic.GenericDatasetJob):
         return generic.views.summary(job)
+    elif isinstance(job, multi.MultiDatasetJob):
+        return multi.views.summary(job)
     else:
-        raise werkzeug.exceptions.BadRequest('Invalid job type')
+        raise werkzeug.exceptions.BadRequest('Invalid job type 2')

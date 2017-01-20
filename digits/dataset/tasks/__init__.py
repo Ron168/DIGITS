@@ -4,11 +4,13 @@ from __future__ import absolute_import
 from .analyze_db import AnalyzeDbTask
 from .create_db import CreateDbTask
 from .create_generic_db import CreateGenericDbTask
+from .create_multi_db import CreateMultiDbTask
 from .parse_folder import ParseFolderTask
 
 __all__ = [
     'AnalyzeDbTask',
     'CreateDbTask',
     'CreateGenericDbTask',
+    'CreateMultiDbTask',
     'ParseFolderTask',
 ]

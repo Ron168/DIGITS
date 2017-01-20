@@ -218,6 +218,8 @@ class CaffeTrainTask(TrainTask):
             self.save_files_classification()
         elif isinstance(self.job, digits.model.images.generic.GenericImageModelJob):
             self.save_files_generic()
+        elif isinstance(self.job, digits.model.images.multi.MultiImageModelJob):
+            self.save_files_multi()
         else:
             raise NotImplementedError
 
@@ -837,6 +839,267 @@ class CaffeTrainTask(TrainTask):
 
         return True
 
+    def save_files_multi(self):
+        """
+        Save solver, train_val and deploy files to disk
+        """
+        train_feature_db_paths = self.dataset.get_feature_db_paths(constants.TRAIN_DB)
+        train_label_db_path = self.dataset.get_label_db_path(constants.TRAIN_DB)
+        
+        val_feature_db_paths = self.dataset.get_feature_db_paths(constants.VAL_DB)
+        val_label_db_path = self.dataset.get_label_db_path(constants.VAL_DB)
+
+        assert train_feature_db_paths is not None, 'Training images are required'
+
+        # Save the origin network to file:
+        with open(self.path(self.model_file), 'w') as outfile:
+            text_format.PrintMessage(self.network, outfile)
+
+        # Split up train_val and deploy layers
+
+        network = cleanedUpGenericNetwork(self.network)
+        data_layers, train_val_layers, deploy_layers = filterLayersByState(network)
+
+        # Write train_val file
+
+        train_val_network = caffe_pb2.NetParameter()
+
+        # Data layers
+        # TODO clean this up
+
+        train_image_0_data_layer = None
+        train_image_1_data_layer = None
+        train_label_data_layer = None
+        val_image_0_data_layer = None
+        val_image_1_data_layer = None
+        val_label_data_layer = None
+
+        # Find the existing Data layers
+        for layer in data_layers.layer:
+            for rule in layer.include:
+                if rule.phase == caffe_pb2.TRAIN:
+                    for top_name in layer.top:
+                        if 'data' in top_name:
+                            assert (train_image_0_data_layer is None and train_image_1_data_layer is None), \
+                                'can only specify two train image data layers'
+                            if train_image_0_data_layer is None:
+                                train_image_0_data_layer = layer
+                            else:
+                                train_image_1_data_layer = layer
+                        elif 'label' in top_name:
+                            assert train_label_data_layer is None, \
+                                'cannot specify two train label data layers'
+                            train_label_data_layer = layer
+                elif rule.phase == caffe_pb2.TEST:
+                    for top_name in layer.top:
+                        if 'data' in top_name:
+                            assert (val_image_0_data_layer is None and val_image_1_data_layer is None), \
+                                'can only specify two val image data layers'
+                            if val_image_0_data_layer is None:
+                                val_image_0_data_layer = layer
+                            else:
+                                val_image_1_data_layer = layer
+                        elif 'label' in top_name:
+                            assert val_label_data_layer is None, \
+                                'cannot specify two val label data layers'
+                            val_label_data_layer = layer
+
+        # Create and add the Data layers
+        # (uses info from existing data layers, where possible)
+    
+        train_image_0_data_layer = self.make_multi_data_layer(
+            train_feature_db_paths[0], train_image_0_data_layer, 'data_0', 'data_0', caffe_pb2.TRAIN)
+        if train_image_0_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(train_image_0_data_layer)
+            
+        train_image_1_data_layer = self.make_multi_data_layer(
+            train_feature_db_paths[1], train_image_1_data_layer, 'data_1', 'data_1', caffe_pb2.TRAIN)
+        if train_image_1_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(train_image_1_data_layer)
+
+        train_label_data_layer = self.make_multi_data_layer(
+            train_label_db_path, train_label_data_layer, 'label', 'label', caffe_pb2.TRAIN)
+        if train_label_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(train_label_data_layer)
+
+        val_image_0_data_layer = self.make_multi_data_layer(
+            val_feature_db_paths[0], val_image_0_data_layer, 'data_0', 'data_0', caffe_pb2.TEST)
+        if val_image_0_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(val_image_0_data_layer)
+            
+        val_image_1_data_layer = self.make_multi_data_layer(
+            val_feature_db_paths[1], val_image_1_data_layer, 'data_1', 'data_1', caffe_pb2.TEST)
+        if val_image_1_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(val_image_1_data_layer)
+
+        val_label_data_layer = self.make_multi_data_layer(
+            val_label_db_path, val_label_data_layer, 'label', 'label', caffe_pb2.TEST)
+        if val_label_data_layer is not None:
+            train_val_network.layer.add().CopyFrom(val_label_data_layer)
+
+        # Add non-data layers
+        train_val_network.MergeFrom(train_val_layers)
+
+        # Write to file
+        with open(self.path(self.train_val_file), 'w') as outfile:
+            text_format.PrintMessage(train_val_network, outfile)
+
+        # network sanity checks
+        self.logger.debug("Network sanity check - train")
+        CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TRAIN)
+        if val_image_0_data_layer is not None:
+            self.logger.debug("Network sanity check - val")
+            CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TEST)
+        if val_image_1_data_layer is not None:
+            self.logger.debug("Network sanity check - val")
+            CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TEST)
+
+        # Write deploy file
+
+        deploy_network = caffe_pb2.NetParameter()
+
+        # Input
+        deploy_network.input.append('data_0')
+        shape = deploy_network.input_shape.add()
+        shape.dim.append(1)
+        shape.dim.append(self.dataset.get_feature_dims()[2])  # channels
+        if train_image_0_data_layer.transform_param.HasField('crop_size'):
+            shape.dim.append(
+                train_image_0_data_layer.transform_param.crop_size)
+            shape.dim.append(
+                train_image_0_data_layer.transform_param.crop_size)
+        else:
+            shape.dim.append(self.dataset.get_feature_dims()[0])  # height
+            shape.dim.append(self.dataset.get_feature_dims()[1])  # width
+            
+        deploy_network.input.append('data_1')
+        shape = deploy_network.input_shape.add()
+        shape.dim.append(1)
+        shape.dim.append(self.dataset.get_feature_dims()[2])  # channels
+        if train_image_1_data_layer.transform_param.HasField('crop_size'):
+            shape.dim.append(
+                train_image_1_data_layer.transform_param.crop_size)
+            shape.dim.append(
+                train_image_1_data_layer.transform_param.crop_size)
+        else:
+            shape.dim.append(self.dataset.get_feature_dims()[0])  # height
+            shape.dim.append(self.dataset.get_feature_dims()[1])  # width
+
+        # Layers
+        deploy_network.MergeFrom(deploy_layers)
+
+        # Write to file
+        with open(self.path(self.deploy_file), 'w') as outfile:
+            text_format.PrintMessage(deploy_network, outfile)
+
+        # network sanity checks
+        self.logger.debug("Network sanity check - deploy")
+        CaffeTrainTask.net_sanity_check(deploy_network, caffe_pb2.TEST)
+
+        # Write solver file
+
+        solver = caffe_pb2.SolverParameter()
+        # get enum value for solver type
+        solver.solver_type = getattr(solver, self.solver_type)
+        solver.net = self.train_val_file
+
+        # Set CPU/GPU mode
+        if config_value('caffe')['cuda_enabled'] and \
+                bool(config_value('gpu_list')):
+            solver.solver_mode = caffe_pb2.SolverParameter.GPU
+        else:
+            solver.solver_mode = caffe_pb2.SolverParameter.CPU
+
+        solver.snapshot_prefix = self.snapshot_prefix
+
+        # Batch accumulation
+        from digits.frameworks import CaffeFramework
+        if self.batch_accumulation and CaffeFramework().can_accumulate_gradients():
+            solver.iter_size = self.batch_accumulation
+
+        # Epochs -> Iterations
+        train_iter = int(math.ceil(
+            float(self.dataset.get_entry_count(constants.TRAIN_DB)) /
+            (train_image_0_data_layer.data_param.batch_size * solver.iter_size)
+        ))
+        solver.max_iter = train_iter * self.train_epochs
+        snapshot_interval = self.snapshot_interval * train_iter
+        if 0 < snapshot_interval <= 1:
+            solver.snapshot = 1  # don't round down
+        elif 1 < snapshot_interval < solver.max_iter:
+            solver.snapshot = int(snapshot_interval)
+        else:
+            solver.snapshot = 0  # only take one snapshot at the end
+
+        if val_image_0_data_layer:
+            solver.test_iter.append(int(math.ceil(float(self.dataset.get_entry_count(
+                constants.VAL_DB)) / val_image_0_data_layer.data_param.batch_size)))
+            val_interval = self.val_interval * train_iter
+            if 0 < val_interval <= 1:
+                solver.test_interval = 1  # don't round down
+            elif 1 < val_interval < solver.max_iter:
+                solver.test_interval = int(val_interval)
+            else:
+                solver.test_interval = solver.max_iter  # only test once at the end
+
+        # Learning rate
+        solver.base_lr = self.learning_rate
+        solver.lr_policy = self.lr_policy['policy']
+        scale = float(solver.max_iter) / 100.0
+        if solver.lr_policy == 'fixed':
+            pass
+        elif solver.lr_policy == 'step':
+            # stepsize = stepsize * scale
+            solver.stepsize = int(math.ceil(float(self.lr_policy['stepsize']) * scale))
+            solver.gamma = self.lr_policy['gamma']
+        elif solver.lr_policy == 'multistep':
+            for value in self.lr_policy['stepvalue'].split(','):
+                # stepvalue = stepvalue * scale
+                solver.stepvalue.append(int(math.ceil(float(value) * scale)))
+            solver.gamma = self.lr_policy['gamma']
+        elif solver.lr_policy == 'exp':
+            # gamma = gamma^(1/scale)
+            solver.gamma = math.pow(self.lr_policy['gamma'], 1.0 / scale)
+        elif solver.lr_policy == 'inv':
+            # gamma = gamma / scale
+            solver.gamma = self.lr_policy['gamma'] / scale
+            solver.power = self.lr_policy['power']
+        elif solver.lr_policy == 'poly':
+            solver.power = self.lr_policy['power']
+        elif solver.lr_policy == 'sigmoid':
+            # gamma = -gamma / scale
+            solver.gamma = -1.0 * self.lr_policy['gamma'] / scale
+            # stepsize = stepsize * scale
+            solver.stepsize = int(math.ceil(float(self.lr_policy['stepsize']) * scale))
+        else:
+            raise Exception('Unknown lr_policy: "%s"' % solver.lr_policy)
+
+        # These solver types don't support momentum
+        unsupported = [solver.ADAGRAD]
+        try:
+            unsupported.append(solver.RMSPROP)
+        except AttributeError:
+            pass
+
+        if solver.solver_type not in unsupported:
+            solver.momentum = 0.9
+        solver.weight_decay = solver.base_lr / 100.0
+
+        # Display 8x per epoch, or once per 5000 images, whichever is more frequent
+        solver.display = max(1, min(
+            int(math.floor(float(solver.max_iter) / (self.train_epochs * 8))),
+            int(math.ceil(5000.0 / (train_image_0_data_layer.data_param.batch_size * solver.iter_size)))
+        ))
+
+        if self.random_seed is not None:
+            solver.random_seed = self.random_seed
+
+        with open(self.path(self.solver_file), 'w') as outfile:
+            text_format.PrintMessage(solver, outfile)
+        self.solver = solver  # save for later
+
+        return True
+
     def make_generic_data_layer(self, db_path, orig_layer, name, top, phase):
         """
         Utility within save_files_generic for creating a Data layer
@@ -885,6 +1148,70 @@ class CaffeTrainTask(TrainTask):
 
         # crop size
         if name == 'data' and self.crop_size:
+            max_crop_size = min(self.dataset.get_feature_dims()[0], self.dataset.get_feature_dims()[1])
+            assert self.crop_size <= max_crop_size, 'crop_size is larger than the image size'
+            layer.transform_param.crop_size = self.crop_size
+        return layer
+
+    def make_multi_data_layer(self, db_path, orig_layer, name, top, phase):
+        """
+        Utility within save_files_multi for creating a Data layer
+        Returns a LayerParameter (or None)
+
+        Arguments:
+        db_path -- path to database (or None)
+        orig_layer -- a LayerParameter supplied by the user (or None)
+        """
+        if db_path is None:
+            # TODO allow user to specify a standard data layer even if it doesn't exist in the dataset
+            return None
+        layer = caffe_pb2.LayerParameter()
+        if orig_layer is not None:
+            layer.CopyFrom(orig_layer)
+        layer.type = 'Data'
+        if not layer.HasField('name'):
+            layer.name = name
+        if not len(layer.top):
+            layer.top.append(top)
+        layer.ClearField('include')
+        layer.include.add(phase=phase)
+
+        # source
+        if layer.data_param.HasField('source'):
+            self.logger.warning('Ignoring data_param.source ...')
+        layer.data_param.source = db_path
+        if layer.data_param.HasField('backend'):
+            self.logger.warning('Ignoring data_param.backend ...')
+        layer.data_param.backend = caffe_pb2.DataParameter.LMDB
+
+        # batch size
+        if not layer.data_param.HasField('batch_size'):
+            layer.data_param.batch_size = constants.DEFAULT_BATCH_SIZE
+        if self.batch_size:
+            layer.data_param.batch_size = self.batch_size
+        
+        mean_files = self.dataset.get_mean_files()
+        if "0" in name:
+            self.logger.info('Adding mean file 0 to ' + name)
+            mean_file = mean_files[0]
+        elif "1" in name:
+            mean_file = mean_files[1]
+            self.logger.info('Adding mean file 1 to ' + name)
+        else:
+            mean_file = None
+            self.logger.info('No mean file found for ' + name)
+        
+        # mean
+        if 'data' in name and mean_file:
+            if self.use_mean == 'pixel':
+                mean_pixel = self.get_mean_pixel(self.dataset.path(mean_file))
+                # remove any values that may already be in the network
+                self.set_mean_value(layer, mean_pixel)
+            elif self.use_mean == 'image':
+                self.set_mean_file(layer, self.dataset.path(mean_file))
+
+        # crop size
+        if 'data' in name and self.crop_size:
             max_crop_size = min(self.dataset.get_feature_dims()[0], self.dataset.get_feature_dims()[1])
             assert self.crop_size <= max_crop_size, 'crop_size is larger than the image size'
             layer.transform_param.crop_size = self.crop_size
@@ -1707,6 +2034,7 @@ def cleanedUpGenericNetwork(original_network):
                 "Don't leave inner_product_param.num_output unset for generic networks (layer %s)" % layer.name
 
     return network
+
 
 
 def filterLayersByState(network):

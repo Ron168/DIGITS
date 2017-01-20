@@ -37,6 +37,12 @@ class DatasetJob(Job):
         Return the absolute feature DB path for the specified stage
         """
         raise NotImplementedError('Please implement me')
+    
+    def get_feature_db_paths(self, stage):
+        """
+        Return the absolute feature DB paths for the specified stage
+        """
+        raise NotImplementedError('Please implement me')
 
     def get_feature_dims(self):
         """
@@ -55,3 +61,10 @@ class DatasetJob(Job):
         Return the mean file
         """
         raise NotImplementedError('Please implement me')
+    
+    def get_mean_files(self):
+        """
+        Return the mean files
+        """
+        raise NotImplementedError('Please implement me')
+

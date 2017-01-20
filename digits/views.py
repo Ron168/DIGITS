@@ -65,6 +65,11 @@ def home(tab=2):
                     'url': flask.url_for(
                         'digits.dataset.images.generic.views.new'),
                 },
+                'image-multi': {
+                    'title': 'Multi',
+                    'url': flask.url_for(
+                        'digits.dataset.images.multi.views.new'),
+                },
             },
         }
 
@@ -79,6 +84,11 @@ def home(tab=2):
                     'title': 'Other',
                     'url': flask.url_for(
                         'digits.model.images.generic.views.new'),
+                },
+                'image-multi': {
+                    'title': 'Multi',
+                    'url': flask.url_for(
+                        'digits.model.images.multi.views.new'),
                 },
             },
         }
@@ -593,14 +603,21 @@ def clone_job(clone):
     if isinstance(job, dataset.GenericDatasetJob):
         return flask.redirect(
             flask.url_for('digits.dataset.generic.views.new', extension_id=job.extension_id) + '?clone=' + clone)
+    if isinstance(job, dataset.MultiDatasetJob):
+        return flask.redirect(
+            flask.url_for('digits.dataset.multi.views.new', extension_id=job.extension_id) + '?clone=' + clone)
     if isinstance(job, dataset.ImageClassificationDatasetJob):
         return flask.redirect(flask.url_for('digits.dataset.images.classification.views.new') + '?clone=' + clone)
     if isinstance(job, dataset.GenericImageDatasetJob):
         return flask.redirect(flask.url_for('digits.dataset.images.generic.views.new') + '?clone=' + clone)
+    if isinstance(job, dataset.MultiImageDatasetJob):
+        return flask.redirect(flask.url_for('digits.dataset.images.multi.views.new') + '?clone=' + clone)
     if isinstance(job, model.ImageClassificationModelJob):
         return flask.redirect(flask.url_for('digits.model.images.classification.views.new') + '?clone=' + clone)
     if isinstance(job, model.GenericImageModelJob):
         return flask.redirect(flask.url_for('digits.model.images.generic.views.new') + '?clone=' + clone)
+    if isinstance(job, model.MultiImageModelJob):
+        return flask.redirect(flask.url_for('digits.model.images.multi.views.new') + '?clone=' + clone)
     else:
         raise werkzeug.exceptions.BadRequest('Invalid job type')
 

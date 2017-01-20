@@ -44,6 +44,8 @@ def show(job_id):
             return model_images.classification.views.show(job, related_jobs=related_jobs)
         elif isinstance(job, model_images.GenericImageModelJob):
             return model_images.generic.views.show(job, related_jobs=related_jobs)
+        elif isinstance(job, model_images.MultiImageModelJob):
+            return model_images.multi.views.show(job, related_jobs=related_jobs)
         else:
             raise werkzeug.exceptions.BadRequest(
                 'Invalid job type')
